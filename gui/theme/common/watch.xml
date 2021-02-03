@@ -3380,7 +3380,11 @@
 
 		<page name="reboot">
 			<action>
+				<condition var1="tw_app_install_status" op="!=" var2="2"/>
 				<action function="checkforapp"></action>
+			</action>
+
+			<action>
 				<action function="page">reboot2</action>
 			</action>
 		</page>

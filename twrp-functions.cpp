@@ -1303,6 +1303,7 @@ void TWFunc::check_selinux_support() {
 	}
 }
 
+#ifndef TW_EXCLUDE_TWRPAPP
 bool TWFunc::Is_TWRP_App_In_System() {
 	bool is_system_mounted = true;
 	if(!PartitionManager.Is_Mounted_By_Path(PartitionManager.Get_Android_Root_Path())) {
@@ -1373,6 +1374,7 @@ exit:
 	return;
 
 }
+#endif
 
 int TWFunc::Property_Override(string Prop_Name, string Prop_Value) {
 #ifdef TW_INCLUDE_LIBRESETPROP

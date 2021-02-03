@@ -327,7 +327,9 @@ protected:
 	int getpartitiondetails(std::string arg);
 	int screenshot(std::string arg);
 	int setbrightness(std::string arg);
+#ifndef TW_EXCLUDE_TWRPAPP
 	int checkforapp(std::string arg);
+#endif
 
 	// (originally) threaded actions
 	int fileexists(std::string arg);
@@ -367,8 +369,10 @@ protected:
 	int togglebacklight(std::string arg);
 	int twcmd(std::string arg);
 	int setbootslot(std::string arg);
+#ifndef TW_EXCLUDE_TWRPAPP
 	int installapp(std::string arg);
 	int uninstalltwrpsystemapp(std::string arg);
+#endif
 	int repackimage(std::string arg);
 	int fixabrecoverybootloop(std::string arg);
 	int changeterminal(std::string arg);

@@ -294,22 +294,30 @@ bool is_Firmware_Mounted(void) {
 }
 
 bool will_VendorBin_Be_Symlinked(void) {
-	return (!is_Vendor_Mounted() && TWFunc::Path_Exists("/system/vendor"));
+	return (!is_Vendor_Mounted() && (TWFunc::Path_Exists(PartitionManager.Get_Android_Root_Path() + "/system/vendor") || TWFunc::Path_Exists("/system/vendor")));
 }
 
 bool Symlink_Vendor_Folder(void) {
 	bool is_vendor_symlinked = false;
+	string vendor_path = "";
 
 	if (is_Vendor_Mounted()) {
 		LOGINFO("vendor partition mounted, skipping /vendor substitution\n");
 	}
+	else if (TWFunc::Path_Exists(PartitionManager.Get_Android_Root_Path() + "/system/vendor")) {
+		vendor_path = PartitionManager.Get_Android_Root_Path() + "/system/vendor";
+	}
 	else if (TWFunc::Path_Exists("/system/vendor")) {
+		vendor_path = "/system/vendor";
+	}
+
+	if (vendor_path != "") {
 		LOGINFO("Symlinking vendor folder...\n");
 		if (!TWFunc::Path_Exists("/vendor") || vrename("/vendor", "/vendor-orig") == 0) {
 			TWFunc::Recursive_Mkdir("/vendor/firmware/keymaster");
-			vsymlink("/system/vendor/lib64", "/vendor/lib64", true);
-			vsymlink("/system/vendor/lib", "/vendor/lib", true);
-			vsymlink("/system/vendor/bin", "/vendor/bin", true);
+			vsymlink(vendor_path + "/lib64", "/vendor/lib64", true);
+			vsymlink(vendor_path + "/lib", "/vendor/lib", true);
+			vsymlink(vendor_path + "/bin", "/vendor/bin", true);
 			is_vendor_symlinked = true;
 			property_set("vold_decrypt.symlinked_vendor", "1");
 		}
@@ -383,7 +391,7 @@ void Symlink_Firmware_Files(bool is_vendor_symlinked, bool is_firmware_symlinked
 	LOGINFO("Symlinking firmware files...\n");
 
 	vector<string> FirmwareFiles;
-	Find_Firmware_Files("/system", &FirmwareFiles);
+	Find_Firmware_Files(PartitionManager.Get_Android_Root_Path(), &FirmwareFiles);
 
 	for (size_t i = 0; i < FirmwareFiles.size(); ++i) {
 		string base_name = TWFunc::Get_Filename(FirmwareFiles[i]);
@@ -698,7 +706,16 @@ vector<AdditionalService> Get_List_Of_Additional_Services(void) {
 		for (size_t j = 0; j < services.size(); ++j) {
 			string path = RC_Services[i].Service_Path;
 			if (prefix == "ven_" && will_VendorBin_Be_Symlinked()) {
-				path = "/system" + path; // vendor is going to get symlinked to /system/vendor
+				if (TWFunc::Path_Exists(PartitionManager.Get_Android_Root_Path() + "/system" + path)) {
+					path = PartitionManager.Get_Android_Root_Path() + "/system" + path;
+				}
+				else {
+					path = "/system" + path;
+				}
+			} else if (prefix == "sys_") {
+				if (TWFunc::Path_Exists(PartitionManager.Get_Android_Root_Path() + path)) {
+					path = PartitionManager.Get_Android_Root_Path() + path;
+				}
 			}
 
 			if (RC_Services[i].Service_Name == prefix + services[j].Service_Name) {
@@ -711,7 +728,7 @@ vector<AdditionalService> Get_List_Of_Additional_Services(void) {
 				else if (TWFunc::Path_Exists(path)) {
 					services[j].bin_exists = true;
 					services[j].VOLD_Service_Name = RC_Services[i].Service_Name; // prefix + service_name
-					services[j].Service_Path = RC_Services[i].Service_Path;
+					services[j].Service_Path = path;
 					services[j].Service_Binary = RC_Services[i].Service_Binary;
 
 					if (Service_Exists(services[j].Service_Name))
@@ -762,6 +779,58 @@ vector<AdditionalService> Get_List_Of_Additional_Services(void) {
 }
 #endif
 
+void Setup_Apex(void) {
+	// Create /apex dir
+	string apexRootPath = "/apex";
+	if (!TWFunc::Path_Exists(apexRootPath)) {
+		TWFunc::Recursive_Mkdir(apexRootPath);
+	}
+
+	// Run apexd --bootstrap
+	bool isRunning = Start_Service("sys_apexd-setup");
+	if (!isRunning) {
+		return;
+	}
+
+	// Wait until apexd --bootstrap finishes
+	string apexService = "init.svc.sys_apexd-setup";
+	Wait_For_Property(apexService, 5000000, "stopped");
+}
+
+void Drop_Apex(void) {
+	// Check /apex dir
+	string apexRootPath = "/apex";
+	if (!TWFunc::Path_Exists(apexRootPath)) {
+		return;
+	}
+
+	// Open /apex dir
+	DIR* d = NULL;
+	if ((d = opendir(apexRootPath.c_str())) == NULL) {
+		return;
+	}
+
+	// Enumerate subdirs
+	struct dirent* de = NULL;
+        while ((de = readdir(d)) != NULL) {
+		if (de->d_type != DT_DIR) {
+			continue;
+		}
+
+		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
+			continue;
+		}
+
+		string apexPath = apexRootPath + "/" + de->d_name;
+		if (umount2(apexPath.c_str(), UMOUNT_NOFOLLOW | MNT_DETACH) != 0) {
+			continue;
+		}
+
+		TWFunc::removeDir(apexPath, false);
+	}
+
+	closedir(d);
+}
 
 /* Misc Functions */
 void Set_Needed_Properties(void) {
@@ -994,10 +1063,14 @@ int Exec_vdc_cryptfs(const string& command, const string& argument, vdc_ReturnVa
 		}
 	}
 
-	// getpwtype and checkpw commands are removed from Pie vdc, using modified vdc_pie
-	const char *cmd[] = { "/sbin/vdc_pie", "cryptfs" };
-	if (sdkver < 28)
-		cmd[0] = "/system/bin/vdc";
+	// getpwtype and checkpw commands are removed from P/Q vdc, using modified vdc_pie/vdc_ten
+	const char *cmd[] = { "/system/bin/vdc", "cryptfs" };
+	if (sdkver >= 29 && TWFunc::Path_Exists("/sbin/vdc_ten")) {
+		cmd[0] = "/sbin/vdc_ten";
+	}
+	else if (sdkver >= 28 && TWFunc::Path_Exists("/sbin/vdc_pie")) {
+		cmd[0] = "/sbin/vdc_pie";
+	}
 	const char *env[] = { "LD_LIBRARY_PATH=/system/lib64:/system/lib", NULL };
 
 	LOGINFO("sdkver: %d, using %s\n", sdkver, cmd[0]);
@@ -1287,6 +1360,11 @@ int Vold_Decrypt_Core(const string& Password) {
 	Update_Patch_Level();
 #endif
 
+	// Setup apex
+	if (sdkver > 28) {
+		Setup_Apex();
+	}
+
 	// Start services needed for vold decrypt
 	LOGINFO("Starting services...\n");
 #ifdef TW_CRYPTO_SYSTEM_VOLD_SERVICES
@@ -1350,6 +1428,12 @@ int Vold_Decrypt_Core(const string& Password) {
 		LOGINFO("Failed to start vold\n");
 		res = VD_ERR_VOLD_FAILED_TO_START;
 	}
+
+	// Drop apex
+	if (sdkver > 28) {
+		Drop_Apex();
+	}
+
 #ifdef TW_INCLUDE_LIBRESETPROP
 	Revert_Patch_Level();
 #endif

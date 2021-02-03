@@ -1,4 +1,14 @@
 
+service sys_apexd-setup /system/bin/apexd --bootstrap
+    critical
+    user root
+    group root
+    setenv PATH /system/bin
+    setenv LD_LIBRARY_PATH /system/lib64:/system/lib
+    disabled
+    oneshot
+    seclabel u:r:vold:s0
+
 service sys_vold /system/bin/vold \
         --blkid_context=u:r:blkid:s0 --blkid_untrusted_context=u:r:blkid_untrusted:s0 \
         --fsck_context=u:r:fsck:s0 --fsck_untrusted_context=u:r:fsck_untrusted:s0
